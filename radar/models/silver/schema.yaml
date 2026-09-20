@@ -1,0 +1,24 @@
+
+version: 2
+
+models:
+  - name: annonces
+    description: "Annonces commerciales from BODACC"
+    columns:
+        - name: id
+          description: "Unique identifier for the annonce"
+          data_tests: 
+            - unique 
+            - not_null
+        - name: dateparution
+          description: "Date of publication of the annonce"
+          data_tests: 
+            - not_null
+        - name: typeavis
+          description: "Type of the annonce"
+        - name: familleavis
+          description: "Family of the annonce"
+          data_tests: 
+            - not_null
+        - name: familleavis_lib
+          description: "Family of the annonce (libelle)"

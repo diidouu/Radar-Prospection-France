@@ -1,0 +1,20 @@
+SELECT 
+    id, 
+    dateparution, 
+    typeavis, 
+    familleavis, 
+    familleavis_lib, 
+    numerodepartement, 
+    region_code, 
+    region_nom_officiel, 
+    ville, 
+    cp, 
+    commercant, 
+    registre, 
+    modificationsgenerales, 
+    listepersonnes, 
+    depot,
+    url_complete
+
+FROM
+    read_json_auto('../data/bronze/*/*.json')
