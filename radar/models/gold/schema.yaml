@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: cibles_prospection
+    description: "Cibles à prospecter"
+    columns:
+      - name: dateparution
+        description: "Permet de désigner le vainqueur de chaque tas"
+        data_tests:
+          - not_null
+      - name: siren
+        description: "PARTITION BY sur siten pour en définir le grain"
+        data_tests:
+        - unique
+        - not_null
+      
+  
