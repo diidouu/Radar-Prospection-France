@@ -5,3 +5,5 @@ __pycache__/
 .vscode/
 logs/
 *.duckdb
+
+radar/.user.yml
