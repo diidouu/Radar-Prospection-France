@@ -17,4 +17,4 @@ SELECT
     url_complete
 
 FROM
-    read_json_auto('../data/bronze/*/*.json')
+    {{ source('bronze', 'annonces_bronze') }}

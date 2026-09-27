@@ -6,4 +6,7 @@ __pycache__/
 logs/
 *.duckdb
 
+.dagster_home/
+.tmp_dagster_home_*/
+
 radar/.user.yml

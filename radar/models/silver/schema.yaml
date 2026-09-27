@@ -22,3 +22,10 @@ models:
             - not_null
         - name: familleavis_lib
           description: "Family of the annonce (libelle)"
+
+sources:
+  - name: bronze
+    meta:
+      external_location: "read_json_auto('{{ env_var('BRONZE_GLOB') }}')"
+    tables:
+      - name: annonces_bronze
