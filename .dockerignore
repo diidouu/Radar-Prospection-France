@@ -1,0 +1,16 @@
+# . dockerignore
+data/
+**/__pycache__/
+**/.DS_Store
+.venv/
+.vscode/
+**/logs/
+**/*.duckdb
+
+.dagster_home/
+.tmp_dagster_home_*/
+
+radar/.user.yml
+
+radar/target
+.git/

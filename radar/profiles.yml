@@ -7,7 +7,7 @@ radar:
 
     prod:
       type: duckdb
-      path: prod.duckdb
+      path: /app/data/prod.duckdb
       threads: 4
 
-  target: dev
+  target: "{{ env_var('CIBLE', 'dev') }}"
