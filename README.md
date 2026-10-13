@@ -13,7 +13,7 @@ Le projet suit une architecture médaillon (bronze / silver / gold). Ce choix es
 - **Réutilisation** : les couches gold lisent le même silver, ce qui évite de refaire le nettoyage du bronze pour chaque usage.
 - **Testabilité par couche** : des tests à chaque frontière, donc quand ça casse on sait exactement à quel étage corriger.
 
-L'ensemble est orchestré par **Dagster** : l'ingestion Python et les modèles dbt vivent dans un seul DAG d'assets, déclenché chaque jour à 6 h (Europe/Paris).
+L'ensemble est orchestré par **Dagster** : l'ingestion Python et les modèles dbt vivent dans un seul DAG d'assets, déclenché chaque jour à 6 h (Europe/Paris). Le pipeline tourne en production sur Railway, sans intervention (voir [Déploiement](#déploiement)).
 
 ```
   API BODACC (opendatasoft)
@@ -60,16 +60,30 @@ cd radar && dbt parse && cd ..
 dagster dev -m orchestration.definitions
 ```
 
-Dans l'UI : **Catalog → Materialize** pour produire un jour, **Automation** pour activer le schedule quotidien, **Runs → Backfill** pour rejouer une plage de dates.
+Dans l'UI : **Catalog → Materialize** pour produire un jour, **Runs → Backfill** pour rejouer une plage de dates. Le schedule quotidien est actif par défaut (visible dans **Automation**).
 
-Les deux briques restent utilisables seules : `docker compose up --build` lance l'ingestion du jour, et `cd radar && dbt build` reconstruit silver + gold.
+Pour lancer le pipeline dans les conditions de la production : `docker compose up --build`. Le conteneur démarre le daemon Dagster, et le dossier local `data/` joue le rôle du volume. `cd radar && dbt build` reste utilisable seul pour reconstruire silver + gold.
+
+## Déploiement
+
+Le pipeline tourne sur **Railway**, dans un seul conteneur construit depuis ce repo. Chaque push sur `main` redéploie.
+
+- **Le daemon Dagster seul, sans interface web.** C'est lui qui déclenche le schedule de 6 h. L'interface open source de Dagster n'ayant pas d'authentification, aucun port n'est exposé.
+- **Un volume persistant monté sur `/app/data` porte tout l'état** : le bronze, la base DuckDB de production (cible dbt `prod`, sélectionnée par la variable `CIBLE`) et `DAGSTER_HOME` (historique des runs, état du schedule). L'image ne contient que le code, donc un redéploiement ne perd aucune donnée.
+- **Le manifest dbt est généré au build** (`dbt parse` dans le Dockerfile). Il dépend du code et non des données : il ne change qu'à chaque push, jamais entre deux exécutions.
+- **Le schedule est allumé dans le code** (`default_status=RUNNING`). Une instance neuve démarre avec le schedule actif, sans clic dans une interface.
+- **Au démarrage**, le conteneur crée `DAGSTER_HOME` s'il manque (un volume neuf est vide), puis passe la main au daemon via `exec`, pour qu'il reçoive directement les signaux d'arrêt.
+
+**Rattrapage d'historique** sur un volume neuf : depuis un shell dans le conteneur, une boucle de `dagster asset materialize --select annonces_bronze --partition AAAA-MM-JJ -m orchestration.definitions` remplit le bronze jour par jour. Le run quotidien suivant reconstruit ensuite silver et gold sur l'ensemble.
+
+**Contrôle** : `dagster run list` dans le conteneur pour l'historique des runs. La base de production s'interroge en lecture seule, sans gêner le pipeline : `duckdb.connect('/app/data/prod.duckdb', read_only=True)`.
 
 ## Choix techniques
 
 - **DuckDB** : le volume de données tient sur une machine. DuckDB est un moteur analytique **embarqué** (in-process, aucun serveur à administrer) qui lit le JSON/Parquet nativement, soit l'analytique sans infra.
 - **dbt** : transformations SQL *as code*. Les `ref` construisent le DAG et garantissent l'ordre d'exécution des modèles, avec tests de qualité et documentation auto-générée.
 - **Dagster** : orchestration **orientée assets**. Le pipeline n'est pas une suite de tâches mais un graphe de données. L'ingestion bronze est partitionnée par jour, ce qui rend chaque journée rejouable indépendamment (backfill) et supprime tout calcul de date dans le code : la partition *est* la date. Les modèles dbt sont découverts automatiquement depuis le `manifest.json`, et le lien bronze → dbt passe par une source dbt reliée à l'asset Python via un `DagsterDbtTranslator`.
-- **Docker** : reproductibilité, l'ingestion tourne à l'identique sur toute machine. Docker et Dagster ne sont pas concurrents mais à deux étages différents : l'un isole l'environnement, l'autre ordonnance. En production, Dagster serait lui-même conteneurisé.
+- **Docker** : reproductibilité, l'ingestion tourne à l'identique sur toute machine. Docker et Dagster ne sont pas concurrents mais à deux étages différents : l'un isole l'environnement, l'autre ordonnance. En production, Dagster tourne lui-même dans le conteneur.
 
 ## Qualité
 
@@ -77,14 +91,14 @@ Le pipeline est testé par dbt à chaque exécution : 7 tests déclarés dans le
 
 ## Limites connues
 
-- **Croissance du bronze** : ~19 Mo de JSON par jour, soit ~7 Go/an. Le passage au Parquet diviserait ce volume par 5 à 10 et accélérerait la lecture. C'est le premier changement à faire avant une mise en production.
-- **Silver et gold en *full refresh*** : les modèles relisent l'intégralité du bronze à chaque exécution (12 s pour 26 jours aujourd'hui). Simple et sans risque de trou, mais à basculer en incrémental quand le temps de rebuild deviendra gênant.
-- **Le pipeline tourne sur un poste de développement**, pas sur un serveur. Le schedule est armé mais ne se déclenche que si `dagster dev` tourne : machine éteinte, pas de tick. Le passage en production ne demande aucune modification du code, seulement un hébergement du daemon.
-- **Le venv doit être activé** avant `dagster dev` : `DbtCliResource` cherche l'exécutable `dbt` dans le `PATH`. Un déploiement en service devra passer `dbt_executable` explicitement.
+- **Croissance du stockage** : ~19 Mo de JSON brut par jour, soit ~7 Go/an, sur un volume de 5 Go. Le passage du bronze au Parquet (ou a minima une compression, que DuckDB lit nativement) diviserait ce volume par 5 à 10 et accélérerait la lecture. C'est le prochain changement prioritaire.
+- **Silver et gold en *full refresh*** : les modèles relisent l'intégralité du bronze à chaque exécution (12 s pour 26 jours au départ). Simple et sans risque de trou, mais à basculer en incrémental quand le temps de rebuild deviendra gênant.
+- **Instance Dagster en SQLite sur le volume** : simple, mais limitée à un seul service (Railway n'attache un volume qu'à un service). Séparer le webserver et le daemon demanderait un stockage Postgres partagé.
+- **Pas d'interface en production** : l'observabilité passe aujourd'hui par les logs et la CLI. Un écran d'état du pipeline (dernière exécution, volumes, tests en échec) est prévu.
+- **En local, le venv doit être activé** avant `dagster dev` : `DbtCliResource` cherche l'exécutable `dbt` dans le `PATH`.
 
 ## Roadmap
 
-- **Déploiement** : daemon Dagster hébergé en service (conteneur sur VM ou PaaS) pour que le schedule tourne réellement en continu.
 - **Bronze en Parquet** + politique de rétention.
 - **Standardisation silver** : typage explicite (dates, siren), contrôle de formats, tests `accepted_values`.
 - **Enrichissement SIRENE** : croisement avec l'API Recherche d'Entreprises (secteur, effectifs, coordonnées).
